@@ -1,23 +1,14 @@
 @echo off
 setlocal
 
-:: ==================================================
-:: VALIDAR ADMINISTRADOR
-:: ==================================================
-
-net session >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo [INFO] Solicitando permisos de administrador...
-    powershell -Command "Start-Process '%~f0' -Verb RunAs"
-    exit /b
-)
-
 cd /d "%~dp0"
 
 :: ==================================================
 :: CONFIGURACION
 :: ==================================================
 
+set "SCRIPT=%~f0"
+set "CONFIGURAR_PERFIL=%~dp0ConfigurarPerfil.ps1"
 set "APPDIR=%~dp0aplicaciones"
 
 set "ADOBE=%APPDIR%\AcroRdrDC2300820533_es_ES.exe"
@@ -29,10 +20,113 @@ set "WINRAR=%APPDIR%\winrar-x64-600es.exe"
 set "CM=%APPDIR%\CM\Client\CCMSetup.exe"
 set "CERT=%APPDIR%\certificado.cer"
 
+if /I "%~1"=="/install-worker" goto InstalacionElevada
+call :CuentaAdministradora
+if errorlevel 1 goto FlujoEstandar
+call :SesionElevada
+if errorlevel 1 goto ElevarAdministrador
+goto FlujoAdministrador
+
+:ElevarAdministrador
+echo [INFO] Solicitando permisos de administrador...
+call :ElevarProceso /admin
+exit /b
+
+:FlujoAdministrador
+call :MenuInstalacion
+call :CrearPerfilEstandar
+echo.
+pause
+exit /b
+
+:InstalacionElevada
+call :SesionElevada
+if errorlevel 1 goto ElevarInstalacion
+call :MenuInstalacion
+exit /b
+
+:ElevarInstalacion
+echo [INFO] Solicitando permisos para instalar aplicaciones...
+call :ElevarProceso /install-worker
+exit /b
+
+:FlujoEstandar
+cls
+echo.
+echo ==================================================
+echo        CONFIGURACION DEL PERFIL ESTANDAR
+echo ==================================================
+echo.
+echo Estado actual de las aplicaciones:
+echo.
+set "FALTAN_APLICACIONES=0"
+call :EstadoAdobe
+if errorlevel 1 set "FALTAN_APLICACIONES=1"
+call :EstadoChrome
+if errorlevel 1 set "FALTAN_APLICACIONES=1"
+call :EstadoTeams
+if errorlevel 1 set "FALTAN_APLICACIONES=1"
+call :EstadoOffice
+if errorlevel 1 set "FALTAN_APLICACIONES=1"
+call :EstadoVLC
+if errorlevel 1 set "FALTAN_APLICACIONES=1"
+call :EstadoWinRAR
+if errorlevel 1 set "FALTAN_APLICACIONES=1"
+call :EstadoCM
+if errorlevel 1 set "FALTAN_APLICACIONES=1"
+call :EstadoCertificado
+if errorlevel 1 set "FALTAN_APLICACIONES=1"
+
+if "%FALTAN_APLICACIONES%"=="1" (
+    echo.
+    choice /C SN /N /M "Faltan aplicaciones. Desea proceder con la instalacion? [S,N]?"
+    if errorlevel 2 goto ConfigurarPerfil
+    call :ElevarProceso /install-worker
+)
+
+:ConfigurarPerfil
+echo.
+echo Cambios de Windows que se aplicaran:
+echo   - Barra de busqueda: solo icono.
+echo   - Vista de tareas: desactivada.
+echo   - Widgets: desactivados.
+echo   - Reanudar: desactivado.
+echo   - Copiar Fondo a Imagenes y aplicar su imagen como fondo de pantalla.
+echo.
+choice /C SN /N /M "Desea continuar con las modificaciones? [S,N]?"
+if errorlevel 2 goto ProcesoFinalizado
+powershell -NoProfile -ExecutionPolicy Bypass -File "%CONFIGURAR_PERFIL%" -Mode ApplyProfile
+if errorlevel 1 echo [ERROR] No se pudieron aplicar todas las personalizaciones.
+
+:ProcesoFinalizado
+echo.
+echo PROCESO FINALIZADO. Presione una tecla para continuar.
+pause >nul
+exit /b
+
+:CuentaAdministradora
+powershell -NoProfile -Command "$adminSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'); $identity = [Security.Principal.WindowsIdentity]::GetCurrent(); if ($identity.Groups -contains $adminSid) { exit 0 }; exit 1" >nul 2>&1
+exit /b %errorlevel%
+
+:SesionElevada
+powershell -NoProfile -Command "$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()); if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 }; exit 1" >nul 2>&1
+exit /b %errorlevel%
+
+:ElevarProceso
+set "BAT_PATH=%SCRIPT%"
+set "BAT_ARGUMENT=%~1"
+powershell -NoProfile -Command "try { $process = Start-Process -FilePath $env:BAT_PATH -ArgumentList $env:BAT_ARGUMENT -Verb RunAs -Wait -PassThru; exit $process.ExitCode } catch { exit 1 }"
+exit /b %errorlevel%
+
+:CrearPerfilEstandar
+powershell -NoProfile -ExecutionPolicy Bypass -File "%CONFIGURAR_PERFIL%" -Mode CreateUser
+exit /b %errorlevel%
+
 :: ==================================================
 :: RESUMEN
 :: ==================================================
 
+:MenuInstalacion
 cls
 
 echo.
@@ -108,7 +202,6 @@ call :EstadoWinRAR
 call :EstadoCM
 call :EstadoCertificado
 echo.
-pause
 exit /b
 
 :: ==================================================
