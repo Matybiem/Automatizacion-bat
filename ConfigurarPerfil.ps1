@@ -103,6 +103,8 @@ function New-StandardUser {
             New-LocalUser -Name $userName -FullName $userName -Password $password | Out-Null
         }
 
+        Set-LocalUser -Name $userName -UserMayNotChangePassword $true -PasswordNeverExpires $true
+
         $usersGroup = Get-LocalGroup -SID 'S-1-5-32-545'
         $userSid = (Get-LocalUser -Name $userName).SID.Value
         $userGroupSids = @(Get-LocalGroupMember -Group $usersGroup | ForEach-Object { $_.SID.Value })
