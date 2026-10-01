@@ -9,13 +9,16 @@ $ErrorActionPreference = 'Stop'
 function Read-YesNo {
     param([string]$Prompt)
 
+    Write-Host "$Prompt " -NoNewline
     while ($true) {
-        $answer = (Read-Host $Prompt).Trim()
-        if ($answer -match '^(?i:S|N)$') {
-            return $answer.ToUpperInvariant()
+        $key = [Console]::ReadKey($true).KeyChar.ToString().ToUpperInvariant()
+        if ($key -in @('S', 'N')) {
+            Write-Host $key
+            return $key
         }
 
-        Write-Host 'Respuesta no valida. Escriba S o N.' -ForegroundColor Yellow
+        Write-Host "`nRespuesta no valida. Presione S o N." -ForegroundColor Yellow
+        Write-Host "$Prompt " -NoNewline
     }
 }
 
@@ -103,7 +106,7 @@ function New-StandardUser {
             New-LocalUser -Name $userName -FullName $userName -Password $password | Out-Null
         }
 
-        Set-LocalUser -Name $userName -UserMayNotChangePassword $true -PasswordNeverExpires $true
+        Set-LocalUser -Name $userName -UserMayChangePassword $false -PasswordNeverExpires $true
 
         $usersGroup = Get-LocalGroup -SID 'S-1-5-32-545'
         $userSid = (Get-LocalUser -Name $userName).SID.Value
