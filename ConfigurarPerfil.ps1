@@ -126,14 +126,31 @@ function Set-TaskbarOption {
         [int]$Value
     )
 
-    New-Item -Path $Path -Force | Out-Null
+    $currentValue = (Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue).$Name
+    if ($null -ne $currentValue -and [int]$currentValue -eq $Value) {
+        Write-Host "'$Name' ya esta aplicado." -ForegroundColor Green
+        return $false
+    }
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -Path $Path -Force | Out-Null
+    }
     New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType DWord -Force | Out-Null
+
+    $verifiedValue = (Get-ItemProperty -Path $Path -Name $Name -ErrorAction Stop).$Name
+    if ([int]$verifiedValue -ne $Value) {
+        throw "Windows no guardo el valor esperado para '$Name'. Valor actual: $verifiedValue"
+    }
+
+    Write-Host "'$Name' actualizado correctamente." -ForegroundColor Green
+    return $true
 }
 
 function Set-ProfilePersonalization {
     $advancedPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
     $searchPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search'
     $issues = [System.Collections.Generic.List[string]]::new()
+    $profileChanged = $false
 
     $taskbarSettings = @(
         @{ Path = $searchPath; Name = 'SearchboxTaskbarMode'; Value = 1 },
@@ -144,7 +161,9 @@ function Set-ProfilePersonalization {
 
     foreach ($setting in $taskbarSettings) {
         try {
-            Set-TaskbarOption -Path $setting.Path -Name $setting.Name -Value $setting.Value
+            if (Set-TaskbarOption -Path $setting.Path -Name $setting.Name -Value $setting.Value) {
+                $profileChanged = $true
+            }
         }
         catch {
             $issues.Add("No se pudo configurar '$($setting.Name)': $($_.Exception.Message)")
@@ -170,12 +189,25 @@ function Set-ProfilePersonalization {
         }
 
         $destinationFolder = Join-Path $pictureFolder 'Fondo'
-        New-Item -Path $destinationFolder -ItemType Directory -Force | Out-Null
-        Get-ChildItem -LiteralPath $sourceFolder | Copy-Item -Destination $destinationFolder -Recurse -Force
-
         $relativeImagePath = $sourceImages[0].FullName.Substring($sourceFolder.Length).TrimStart('\')
         $wallpaperPath = Join-Path $destinationFolder $relativeImagePath
-        Write-Host "Carpeta Fondo copiada a: $destinationFolder" -ForegroundColor Green
+
+        $copyRequired = -not (Test-Path -LiteralPath $wallpaperPath -PathType Leaf)
+        if (-not $copyRequired) {
+            $sourceHash = (Get-FileHash -LiteralPath $sourceImages[0].FullName -Algorithm SHA256).Hash
+            $destinationHash = (Get-FileHash -LiteralPath $wallpaperPath -Algorithm SHA256).Hash
+            $copyRequired = $sourceHash -ne $destinationHash
+        }
+
+        if ($copyRequired) {
+            New-Item -Path $destinationFolder -ItemType Directory -Force | Out-Null
+            Get-ChildItem -LiteralPath $sourceFolder | Copy-Item -Destination $destinationFolder -Recurse -Force
+            Write-Host "Carpeta Fondo copiada a: $destinationFolder" -ForegroundColor Green
+            $profileChanged = $true
+        }
+        else {
+            Write-Host "El fondo ya esta copiado en: $destinationFolder" -ForegroundColor Green
+        }
     }
     catch {
         $issues.Add("No se pudo copiar la carpeta Fondo: $($_.Exception.Message)")
@@ -183,10 +215,15 @@ function Set-ProfilePersonalization {
 
     if ($wallpaperPath) {
         try {
-            Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'WallPaper' -Value $wallpaperPath
+            $currentWallpaper = (Get-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'WallPaper' -ErrorAction SilentlyContinue).WallPaper
+            if ([string]::Equals($currentWallpaper, $wallpaperPath, [StringComparison]::OrdinalIgnoreCase)) {
+                Write-Host 'El fondo de pantalla ya esta aplicado.' -ForegroundColor Green
+            }
+            else {
+                Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'WallPaper' -Value $wallpaperPath
 
-            if (-not ('Wallpaper.NativeMethods' -as [type])) {
-                Add-Type -TypeDefinition @'
+                if (-not ('Wallpaper.NativeMethods' -as [type])) {
+                    Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 namespace Wallpaper {
@@ -196,30 +233,37 @@ namespace Wallpaper {
     }
 }
 '@
-            }
+                }
 
-            $updated = [Wallpaper.NativeMethods]::SystemParametersInfo(20, 0, $wallpaperPath, 3)
-            if (-not $updated) {
-                throw "Windows no pudo aplicar el fondo de pantalla (error $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))."
-            }
+                $updated = [Wallpaper.NativeMethods]::SystemParametersInfo(20, 0, $wallpaperPath, 3)
+                if (-not $updated) {
+                    throw "Windows no pudo aplicar el fondo de pantalla (error $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))."
+                }
 
-            Write-Host "Fondo aplicado: $wallpaperPath" -ForegroundColor Green
+                Write-Host "Fondo aplicado: $wallpaperPath" -ForegroundColor Green
+                $profileChanged = $true
+            }
         }
         catch {
             $issues.Add("No se pudo aplicar el fondo de pantalla: $($_.Exception.Message)")
         }
     }
 
-    try {
-        $explorer = Get-Process -Name explorer -ErrorAction SilentlyContinue
-        if ($explorer) {
-            Stop-Process -Name explorer -Force
+    if ($profileChanged) {
+        try {
+            $explorer = Get-Process -Name explorer -ErrorAction SilentlyContinue
+            if ($explorer) {
+                Stop-Process -Name explorer -Force
+            }
+            Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe')
+            Write-Host 'Explorador de Windows reiniciado para actualizar la barra.' -ForegroundColor Green
         }
-        Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe')
-        Write-Host 'Explorador de Windows reiniciado para actualizar la barra.' -ForegroundColor Green
+        catch {
+            $issues.Add("No se pudo reiniciar el Explorador de Windows: $($_.Exception.Message)")
+        }
     }
-    catch {
-        $issues.Add("No se pudo reiniciar el Explorador de Windows: $($_.Exception.Message)")
+    else {
+        Write-Host 'No se requieren cambios; las personalizaciones ya estan aplicadas.' -ForegroundColor Green
     }
 
     foreach ($issue in $issues) {
