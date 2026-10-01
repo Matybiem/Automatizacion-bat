@@ -105,7 +105,7 @@ pause >nul
 exit /b
 
 :CuentaAdministradora
-powershell -NoProfile -Command "$adminSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'); $identity = [Security.Principal.WindowsIdentity]::GetCurrent(); if ($identity.Groups -contains $adminSid) { exit 0 }; exit 1" >nul 2>&1
+whoami /groups /fo csv | findstr /c:"S-1-5-32-544" >nul 2>&1
 exit /b %errorlevel%
 
 :SesionElevada

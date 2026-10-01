@@ -36,7 +36,7 @@ El cambio de nombre del equipo y su incorporacion al dominio son pasos manuales 
 
 ## Personalizacion de la barra
 
-El perfil estandar configura la busqueda para mostrar solo el icono y desactiva Vista de tareas y Widgets. La opcion «Reanudar» se intenta desactivar mediante el valor de registro `TaskbarResume`; su compatibilidad depende de la version de Windows. Los cambios de la barra pueden requerir cerrar sesion o reiniciar el Explorador de Windows.
+El perfil estandar configura la busqueda para mostrar solo el icono y desactiva Vista de tareas y Widgets. La opcion «Reanudar» se intenta desactivar mediante el valor de registro `TaskbarResume`; su compatibilidad depende de la version de Windows. El script reinicia el Explorador para actualizar la barra. Windows puede restringir la personalizacion mientras no este activado; el script informa por separado si no consigue aplicar el fondo.
 
 ## Git
 

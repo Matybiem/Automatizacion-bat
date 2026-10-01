@@ -133,38 +133,60 @@ function Set-TaskbarOption {
 function Set-ProfilePersonalization {
     $advancedPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
     $searchPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search'
+    $issues = [System.Collections.Generic.List[string]]::new()
 
-    Set-TaskbarOption -Path $searchPath -Name 'SearchboxTaskbarMode' -Value 1
-    Set-TaskbarOption -Path $advancedPath -Name 'ShowTaskViewButton' -Value 0
-    Set-TaskbarOption -Path $advancedPath -Name 'TaskbarDa' -Value 0
-    Set-TaskbarOption -Path $advancedPath -Name 'TaskbarResume' -Value 0
+    $taskbarSettings = @(
+        @{ Path = $searchPath; Name = 'SearchboxTaskbarMode'; Value = 1 },
+        @{ Path = $advancedPath; Name = 'ShowTaskViewButton'; Value = 0 },
+        @{ Path = $advancedPath; Name = 'TaskbarDa'; Value = 0 },
+        @{ Path = $advancedPath; Name = 'TaskbarResume'; Value = 0 }
+    )
 
-    $sourceFolder = Join-Path $PSScriptRoot 'Fondo'
-    if (-not (Test-Path -LiteralPath $sourceFolder -PathType Container)) {
-        throw "No se encontro la carpeta Fondo: $sourceFolder"
+    foreach ($setting in $taskbarSettings) {
+        try {
+            Set-TaskbarOption -Path $setting.Path -Name $setting.Name -Value $setting.Value
+        }
+        catch {
+            $issues.Add("No se pudo configurar '$($setting.Name)': $($_.Exception.Message)")
+        }
     }
 
-    $imageExtensions = @('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
-    $sourceImages = @(Get-ChildItem -LiteralPath $sourceFolder -File -Recurse | Where-Object { $imageExtensions -contains $_.Extension.ToLowerInvariant() })
-    if ($sourceImages.Count -ne 1) {
-        throw "Se esperaba exactamente una imagen compatible dentro de '$sourceFolder'; se encontraron $($sourceImages.Count)."
+    $wallpaperPath = $null
+    try {
+        $sourceFolder = Join-Path $PSScriptRoot 'Fondo'
+        if (-not (Test-Path -LiteralPath $sourceFolder -PathType Container)) {
+            throw "No se encontro la carpeta Fondo: $sourceFolder"
+        }
+
+        $imageExtensions = @('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
+        $sourceImages = @(Get-ChildItem -LiteralPath $sourceFolder -File -Recurse | Where-Object { $imageExtensions -contains $_.Extension.ToLowerInvariant() })
+        if ($sourceImages.Count -ne 1) {
+            throw "Se esperaba exactamente una imagen compatible dentro de '$sourceFolder'; se encontraron $($sourceImages.Count)."
+        }
+
+        $pictureFolder = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyPictures)
+        if ([string]::IsNullOrWhiteSpace($pictureFolder)) {
+            throw 'Windows no pudo determinar la carpeta Imagenes del usuario.'
+        }
+
+        $destinationFolder = Join-Path $pictureFolder 'Fondo'
+        New-Item -Path $destinationFolder -ItemType Directory -Force | Out-Null
+        Get-ChildItem -LiteralPath $sourceFolder | Copy-Item -Destination $destinationFolder -Recurse -Force
+
+        $relativeImagePath = $sourceImages[0].FullName.Substring($sourceFolder.Length).TrimStart('\')
+        $wallpaperPath = Join-Path $destinationFolder $relativeImagePath
+        Write-Host "Carpeta Fondo copiada a: $destinationFolder" -ForegroundColor Green
+    }
+    catch {
+        $issues.Add("No se pudo copiar la carpeta Fondo: $($_.Exception.Message)")
     }
 
-    $pictureFolder = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyPictures)
-    if ([string]::IsNullOrWhiteSpace($pictureFolder)) {
-        throw 'Windows no pudo determinar la carpeta Imagenes del usuario.'
-    }
+    if ($wallpaperPath) {
+        try {
+            Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'WallPaper' -Value $wallpaperPath
 
-    $destinationFolder = Join-Path $pictureFolder 'Fondo'
-    New-Item -Path $destinationFolder -ItemType Directory -Force | Out-Null
-    Copy-Item -Path (Join-Path $sourceFolder '*') -Destination $destinationFolder -Recurse -Force
-
-    $relativeImagePath = $sourceImages[0].FullName.Substring($sourceFolder.Length).TrimStart('\')
-    $wallpaperPath = Join-Path $destinationFolder $relativeImagePath
-    Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'WallPaper' -Value $wallpaperPath
-
-    if (-not ('Wallpaper.NativeMethods' -as [type])) {
-        Add-Type -TypeDefinition @'
+            if (-not ('Wallpaper.NativeMethods' -as [type])) {
+                Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 namespace Wallpaper {
@@ -174,16 +196,41 @@ namespace Wallpaper {
     }
 }
 '@
+            }
+
+            $updated = [Wallpaper.NativeMethods]::SystemParametersInfo(20, 0, $wallpaperPath, 3)
+            if (-not $updated) {
+                throw "Windows no pudo aplicar el fondo de pantalla (error $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))."
+            }
+
+            Write-Host "Fondo aplicado: $wallpaperPath" -ForegroundColor Green
+        }
+        catch {
+            $issues.Add("No se pudo aplicar el fondo de pantalla: $($_.Exception.Message)")
+        }
     }
 
-    $updated = [Wallpaper.NativeMethods]::SystemParametersInfo(20, 0, $wallpaperPath, 3)
-    if (-not $updated) {
-        throw "Windows no pudo aplicar el fondo de pantalla (error $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))."
+    try {
+        $explorer = Get-Process -Name explorer -ErrorAction SilentlyContinue
+        if ($explorer) {
+            Stop-Process -Name explorer -Force
+        }
+        Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe')
+        Write-Host 'Explorador de Windows reiniciado para actualizar la barra.' -ForegroundColor Green
+    }
+    catch {
+        $issues.Add("No se pudo reiniciar el Explorador de Windows: $($_.Exception.Message)")
     }
 
-    Write-Host 'Barra de tareas configurada.' -ForegroundColor Green
-    Write-Host "Fondo aplicado: $wallpaperPath" -ForegroundColor Green
-    Write-Host 'Los cambios de la barra pueden requerir cerrar sesion o reiniciar el Explorador de Windows.' -ForegroundColor Yellow
+    foreach ($issue in $issues) {
+        Write-Host "[ERROR] $issue" -ForegroundColor Red
+    }
+
+    if ($issues.Count -eq 0) {
+        Write-Host 'Configuracion de barra y fondo completada.' -ForegroundColor Green
+    }
+
+    return ($issues.Count -eq 0)
 }
 
 try {
@@ -192,8 +239,10 @@ try {
             exit (New-StandardUser)
         }
         'ApplyProfile' {
-            Set-ProfilePersonalization
-            exit 0
+            if (Set-ProfilePersonalization) {
+                exit 0
+            }
+            exit 1
         }
     }
 }
