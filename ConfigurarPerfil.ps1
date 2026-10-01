@@ -37,6 +37,14 @@ function Test-AccountName {
     return $Name.IndexOfAny($invalidCharacters) -lt 0
 }
 
+function Find-LocalUserExact {
+    param([string]$Name)
+
+    Get-LocalUser | Where-Object {
+        [string]::Equals($_.Name, $Name, [StringComparison]::OrdinalIgnoreCase)
+    } | Select-Object -First 1
+}
+
 function ConvertTo-PlainText {
     param([System.Security.SecureString]$Value)
 
@@ -59,8 +67,9 @@ function New-StandardUser {
                 continue
             }
 
-            if (Get-LocalUser -Name $userName -ErrorAction SilentlyContinue) {
-                Write-Host "La cuenta '$userName' ya existe." -ForegroundColor Yellow
+            $existingUser = Find-LocalUserExact -Name $userName
+            if ($null -ne $existingUser) {
+                Write-Host "La cuenta '$($existingUser.Name)' ya existe (SID: $($existingUser.SID.Value), habilitada: $($existingUser.Enabled))." -ForegroundColor Yellow
                 $userName = ''
                 continue
             }
@@ -68,8 +77,8 @@ function New-StandardUser {
             break
         } while ($true)
     }
-    elseif (Get-LocalUser -Name $userName -ErrorAction SilentlyContinue) {
-        Write-Host "La cuenta '$userName' ya existe." -ForegroundColor Red
+    elseif ($existingUser = Find-LocalUserExact -Name $userName) {
+        Write-Host "La cuenta '$($existingUser.Name)' ya existe (SID: $($existingUser.SID.Value), habilitada: $($existingUser.Enabled))." -ForegroundColor Red
         return 1
     }
 
